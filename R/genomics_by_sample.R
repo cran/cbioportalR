@@ -13,18 +13,22 @@
 #' @param sample_study_pairs A dataframe with columns: `sample_id`, `study_id` and `molecular_profile_id` (optional). Variations in capitalization of column names are accepted.
 #' This can be used in place of `sample_id`, `study_id`, `molecular_profile_id` arguments above if you
 #' need to pull samples from several different studies at once. If passed this will take overwrite `sample_id`, `study_id`, `molecular_profile_id` if also passed.
-#' @param data_type specify what type of data to return. Options are`mutations`, `cna`, `fusion`
-#' @param genes A vector of Entrez ids or Hugo symbols. If Hugo symbols are supplied, they will be converted to entrez ids using the `get_entrez_id()` function.  If `panel` and `genes` are both NULL (default), it will return gene results for all available genomic data for that sample.
-#' @param panel One or more panel IDs to query (e.g. 'IMPACT468'). If `panel`  and `genes` are both NULL (default), it will return gene results for all available genomic data for that sample.
-#' @param add_hugo Logical indicating whether `HugoSymbol` should be added to your results. cBioPortal API does not return this by default (only EntrezId) but this function's default is `TRUE` and adds this by default.
+#' @param data_type specify what type of data to return. Options are`mutations`, `cna`, `fusion` or `structural_variant` (same as `fusion`).
+#' @param genes A vector of Entrez ids or Hugo symbols. If Hugo symbols are supplied, they will be converted to entrez ids using the `get_entrez_id()` function.
+#' If `panel` and `genes` are both supplied, genes from both arguments will be returned. If both are NULL (default), it will return gene results for all available genomic data for that sample.
+#' @param panel One or more panel IDs to query (e.g. 'IMPACT468').
+#' If `panel` and `genes` are both supplied, genes from both arguments will be returned. If both are NULL (default), it will return gene results for all available genomic data for that sample.
+#' @param add_hugo Logical indicating whether `HugoGeneSymbol` should be added to your resulting data frame, if not already present in raw API results.
+#' Argument is `TRUE` by default. If `FALSE`, results will be returned as is (i.e. any existing Hugo Symbol columns in raw results will not be removed).
 #' @param base_url The database URL to query
 #' If `NULL` will default to URL set with `set_cbioportal_db(<your_db>)`
 #'
-#' @return A dataframe of mutations or CNAs
+#' @return A dataframe of mutations, CNAs or fusions.
 #' @export
 #'
 #' @keywords internal
-#' @examplesIf !httr::http_error("www.cbioportal.org/api")
+#' @examples
+#' \dontrun{
 #' set_cbioportal_db("public")
 #' .get_data_by_sample(sample_id = c("TCGA-OR-A5J2-01","TCGA-OR-A5J6-01"),
 #'  study_id = "acc_tcga", data_type = "mutation")
@@ -36,7 +40,6 @@
 #' .get_data_by_sample(sample_id = c("P-0002146-T01-IM3"),
 #'  study_id = "blca_plasmacytoid_mskcc_2016", data_type = "fusion")
 #'
-#' \donttest{
 #' df_pairs <- data.frame(
 #' "sample_id" = c("s_C_36924L_P001_d",
 #' "s_C_03LNU8_P001_d"),
@@ -61,7 +64,7 @@
                                 study_id = NULL,
                                 molecular_profile_id = NULL,
                                 sample_study_pairs = NULL,
-                                data_type = c("mutation", "cna", "fusion"),
+                                data_type = c("mutation", "cna", "fusion", "structural_variant"),
 
                                 genes = NULL,
                                 panel = NULL,
@@ -84,13 +87,15 @@
   if(length(study_id) > 1 | length(molecular_profile_id) > 1) {
      cli::cli_abort("More than 1 {.code study_id} or {.code molecular_profile_id} was passed. Please use the {.code sample_study_pairs} argument instead")
   }
-  data_type <- match.arg(data_type)
+  data_type <- match.arg(data_type) %>%
+    purrr::when(. ==  "structural_variant" ~ "fusion",
+                TRUE ~ .)
 
   # this has to go in query URL
   url_data_type <- switch(
     data_type,
     "mutation" = "mutations",
-    "fusion" = "fusion",
+    "fusion" = "structural-variant",
     "cna" = "discrete-copy-number")
 
   # Make Informed guesses on parameters ---------------------------------------
@@ -154,9 +159,6 @@
 
   # * Prep data frame for Query -------------------------------------------------
 
-
-
-
   # If user passes study_id and data_type we can pull the correct molecular ID
   if(!("molecular_profile_id" %in% colnames(sample_study_pairs))) {
 
@@ -171,21 +173,6 @@
       left_join(unique_study_id)
 
   }
-
-  # ** I don't think we should allow molecular profile ID quiery without study IDs in sample_study_pairs because this could conflict with data_type- think about later
-  # if(!("study_id" %in% colnames(sample_study_pairs))) {
-  #
-  #   unique_molec <- distinct(select(sample_study_pairs, .data$molecular_profile_id)) %>%
-  #     mutate(study_id =
-  #              purrr::map(.data$molecular_profile_id,
-  #                         ~.lookup_study_name(.x, study_id = NULL,
-  #                                             base_url = base_url)))
-  #
-  #   sample_study_pairs <- sample_study_pairs %>%
-  #     left_join(unique_molec)
-  #
-  # }
-
 
 
   # * MUTATION/CNA query ----------------------------------------------------------------------
@@ -249,7 +236,7 @@
         )
 
 
-        res <- cbp_api(url_path = "structural-variant/fetch?",
+        res <- cbp_api(url_path = paste0(url_data_type, "/fetch?"),
                        method = "post",
                        body = body_n,
                        base_url = base_url)
@@ -262,7 +249,7 @@
 
     df <- df_fus %>%
       purrr::when(
-        (nrow(.) > 0 & !is.null(resolved_genes)) ~ filter(., .data$site1EntrezGeneId %in% resolved_genes),
+        (nrow(.) > 0 & !is.null(resolved_genes)) ~ filter(., (.data$site1EntrezGeneId %in% resolved_genes) | (.data$site2EntrezGeneId %in% resolved_genes)),
         TRUE ~ .)
 
     # Since you don't query by genes, filter genes at end so behaviour is consistent
@@ -307,18 +294,19 @@
 #' @export
 #'
 #'
-#' @examplesIf !httr::http_error("www.cbioportal.org/api")
+#' @examples
+#' \dontrun{
 #' get_mutations_by_sample(sample_id = c("TCGA-OR-A5J2-01","TCGA-OR-A5J6-01"),
 #' study_id = "acc_tcga",
 #' base_url = "public")
-#'
+#'}
 get_mutations_by_sample <- function(sample_id = NULL,
                                    study_id = NULL,
                                    molecular_profile_id = NULL,
                                    sample_study_pairs = NULL,
                                    genes = NULL,
                                    panel = NULL,
-                                   add_hugo = NULL,
+                                   add_hugo = TRUE,
                                    base_url = NULL) {
 
 
@@ -329,6 +317,7 @@ get_mutations_by_sample <- function(sample_id = NULL,
                     data_type = c("mutation"),
                     genes = genes,
                     panel = panel,
+                    add_hugo = add_hugo,
                     base_url = base_url)
 
 
@@ -344,18 +333,19 @@ get_mutations_by_sample <- function(sample_id = NULL,
 #' @export
 #'
 #'
-#' @examplesIf !httr::http_error("www.cbioportal.org/api")
+#' @examples
+#' \dontrun{
 #' set_cbioportal_db("public")
 #' get_cna_by_sample(sample_id = c("s_C_36924L_P001_d"),
 #'                  study_id = "prad_msk_2019")
-#'
+#' }
 get_cna_by_sample <- function(sample_id = NULL,
                                    study_id = NULL,
                                    molecular_profile_id = NULL,
                                    sample_study_pairs = NULL,
                                    genes = NULL,
                                    panel = NULL,
-                                   add_hugo = NULL,
+                                   add_hugo = TRUE,
                                    base_url = NULL) {
 
   .get_data_by_sample(sample_id = sample_id,
@@ -365,6 +355,7 @@ get_cna_by_sample <- function(sample_id = NULL,
                      data_type = c("cna"),
                      genes = genes,
                      panel = panel,
+                     add_hugo = add_hugo,
                      base_url = base_url)
 
 
@@ -376,20 +367,26 @@ get_cna_by_sample <- function(sample_id = NULL,
 #' @inheritParams .get_data_by_sample
 #' @return A data frame of Fusions
 #' @export
+#' @aliases get_structural_variants_by_sample
 #'
 #'
-#' @examplesIf !httr::http_error("www.cbioportal.org/api")
+#' @examples
+#' \dontrun{
 #' set_cbioportal_db("public")
+#'
+#' #' # These return the same results
 #' get_fusions_by_sample(sample_id = c("s_C_CAUWT7_P001_d"),
 #'                  study_id = "prad_msk_2019")
-#'
+#' get_structural_variants_by_sample(sample_id = c("s_C_CAUWT7_P001_d"),
+#'                  study_id = "prad_msk_2019")
+#'                  }
+
 get_fusions_by_sample <- function(sample_id = NULL,
                               study_id = NULL,
                               molecular_profile_id = NULL,
                               sample_study_pairs = NULL,
                               genes = NULL,
                               panel = NULL,
-                              add_hugo = NULL,
                               base_url = NULL) {
 
   .get_data_by_sample(sample_id = sample_id,
@@ -399,44 +396,50 @@ get_fusions_by_sample <- function(sample_id = NULL,
                      data_type = c("fusion"),
                      genes = genes,
                      panel = panel,
+                     add_hugo = TRUE,
                      base_url = base_url)
 
 
 }
 
+#' @rdname get_fusions_by_sample
+#' @export
+get_structural_variants_by_sample <- get_fusions_by_sample
+
 
 #' Get All Genomic Information By Sample IDs
 #'
 #' @inheritParams .get_data_by_sample
-#' @return A list of mutations, cna and fusions (if available)
+#' @return A list of mutations, cna and structural variants (including fusions), if available.
 #' @export
 #'
 #'
-#' @examplesIf !httr::http_error("www.cbioportal.org/api")
+#' @examples
+#' \dontrun{
 #' get_genetics_by_sample(sample_id = c("TCGA-OR-A5J2-01","TCGA-OR-A5J6-01"),
 #'  study_id = "acc_tcga")
-#'
+#' }
 #
 get_genetics_by_sample <- function(sample_id = NULL,
                                    study_id = NULL,
                                    sample_study_pairs = NULL,
                                    genes = NULL,
                                    panel = NULL,
-                                   add_hugo = NULL,
+                                   add_hugo = TRUE,
                                    base_url = NULL) {
 
   safe_get_data <- purrr::safely(.get_data_by_sample, quiet = TRUE)
 
-  res <-  c("mutation", "cna", "fusion") %>%
+  res <-  c("mutation", "cna", "structural_variant") %>%
     purrr::set_names() %>%
     purrr::map(., function(x) {
       safe_get_data(sample_id = sample_id,
                     study_id = study_id,
-
                     molecular_profile_id = NULL,
                     sample_study_pairs = sample_study_pairs,
                     genes = genes,
                     panel = panel,
+                    add_hugo = add_hugo,
                     base_url = base_url,
                     data_type = x)
     })

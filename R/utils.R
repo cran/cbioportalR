@@ -129,8 +129,8 @@
 
 #' Get Molecular Profile Name for Data Type
 #'
-#'@description See: https://docs.cbioportal.org/5.1-data-loading/data-loading/file-formats#discrete-copy-number-data
-# for definition of molecular profiles. CNA can have _cna, _gistic, _rae molecular profile names
+#' @description See: https://docs.cbioportal.org/5.1-data-loading/data-loading/file-formats#discrete-copy-number-data
+#  for definition of molecular profiles. CNA can have _cna, _gistic, _rae molecular profile names
 
 #' @param data_type specify what type of data to return. Options are`mutation`, `cna`, `fusion`.
 #' @param study_id study id for which to lookup profiles
@@ -157,7 +157,7 @@
 
 
   if(length(resolved_profile) == 0) {
-    cli::cli_abort("No molecular profile for {.code data_type = {data_type}} found in {.val {study_id}}.  See {.code available_profiles('{study_id}')}")
+    cli::cli_abort("No molecular profile for `data_type = {data_type}` found in {.val {study_id}}.  See `available_profiles('{study_id}')`")
   }
 
   resolved_profile
@@ -182,7 +182,7 @@
   quiet_available_profiles <- purrr::quietly(available_profiles)
   profs <- tryCatch(
 
-    # ** Maybe there can be a better API fail message that propogates thorughout because base_url should  always be checked/throw error before
+    # ** Maybe there can be a better API fail message that propagates throughout because base_url should  always be checked/throw error before
     #  any parameter issues.
     quiet_available_profiles(study_id = study_id, base_url = base_url),
                      error = function(e) cli::cli_abort("API Failed, check your database connection ({.code test_cbioportal_db()}) and make sure {.val study_id:}{.code {study_id}} exists ({.code available_studies()})"))
@@ -214,6 +214,12 @@
 #' @export
 #'
 .lookup_hugo <- function(df, base_url) {
+
+  if(any(stringr::str_detect(names(df), "hugoGeneSymbol"))) {
+    cli::cli_warn("{.field 'hugoGeneSymbol'} column already exists. Overwriting this column. Please set {.code add_hugo = FALSE} to supress this}")
+    df <- df %>%
+      select(-all_of('hugoGeneSymbol'))
+  }
 
   hugo <- get_hugo_symbol(unique(df$entrezGeneId)) %>%
     select(-.data$type)

@@ -10,19 +10,20 @@ get_genetics_by_study(study_id = NULL, add_hugo = TRUE, base_url = NULL)
 \item{study_id}{A study ID to query mutations. If NULL, guesses study ID based
 on molecular_profile_id.}
 
-\item{add_hugo}{Logical indicating whether \code{HugoSymbol} should be added to your results. cBioPortal API does not return this by default (only EntrezId) but this functions default is \code{TRUE} and adds this by default.}
+\item{add_hugo}{Logical indicating whether \code{HugoGeneSymbol} should be added to your resulting data frame, if not already present in raw API results.
+Argument is \code{TRUE} by default. If \code{FALSE}, results will be returned as is (i.e. any existing Hugo Symbol columns in raw results will not be removed).}
 
 \item{base_url}{The database URL to query
 If \code{NULL} will default to URL set with \verb{set_cbioportal_db(<your_db>)}}
 }
 \value{
-A list of mutations, cna and fusions (if available)
+A list of mutations, cna and structural variants (including fusions), if available.
 }
 \description{
 Get All Genomic Information By Study
 }
 \examples{
-\dontshow{if (!httr::http_error("www.cbioportal.org/api")) (if (getRversion() >= "3.4") withAutoprint else force)(\{ # examplesIf}
+\dontrun{
 get_genetics_by_study(study_id = "prad_msk_2019")
-\dontshow{\}) # examplesIf}
+}
 }
