@@ -98,11 +98,17 @@ get_clinical_by_study <- function(study_id = NULL,
   df_samp <- purrr::map_df(res$content, ~ tibble::as_tibble(.x))
 
   # filter selected clinical attributes if not NULL
+  df_samp <-
+    if(nrow(df_samp) > 0 & is_not_null(clinical_attribute)) {
+    filter(df_samp, .data$clinicalAttributeId %in% clinical_attribute)
+
+  } else {
+    cli_alert_warning("Sample Level Clinical Data: No {.var clinical_attribute} passed. Defaulting to returning all clinical attributes in {.val {study_id}} study")
+    df_samp
+
+  }
+
   df_samp <- df_samp %>%
-    purrr::when(
-      nrow(df_samp) > 0 & !is.null(clinical_attribute) ~ filter(., clinicalAttributeId %in% clinical_attribute),
-      ~{cli_alert_warning("Sample Level Clinical Data: No {.var clinical_attribute} passed. Defaulting to returning all clinical attributes in {.val {study_id}} study")
-      .}) %>%
     mutate(dataLevel = "SAMPLE")
 
 
@@ -117,12 +123,18 @@ get_clinical_by_study <- function(study_id = NULL,
   df_pat <- purrr::map_df(res$content, ~ tibble::as_tibble(.x))
 
   # filter selected clinical attributes if not NULL
+  df_pat <-
+    if(nrow(df_pat) > 0 & !is.null(clinical_attribute)) {
+      filter(df_pat, .data$clinicalAttributeId %in% clinical_attribute)
+    } else {
+      cli_alert_warning("Patient Level Clinical Data: No {.var clinical_attribute} passed. Defaulting to returning all clinical attributes in {.val {study_id}} study")
+      df_pat
+    }
+
   df_pat <- df_pat %>%
-    purrr::when(
-      nrow(df_pat) > 0 & !is.null(clinical_attribute) ~ filter(., clinicalAttributeId %in% clinical_attribute),
-      ~{cli_alert_warning("Patient Level Clinical Data: No {.var clinical_attribute} passed. Defaulting to returning all clinical attributes in {.val {study_id}} study")
-        .})%>%
-    mutate(dataLevel = "PATIENT")
+    mutate(dataLevel = "PATIENT",
+           sampleId = NA_character_)
+
 
   # put together  ---------------------------------------------------------
 
@@ -146,8 +158,14 @@ get_clinical_by_study <- function(study_id = NULL,
 
 #' Get All Sample IDs in a Study
 #'
+#' Pulls all available sample IDs for a given study ID or sample list ID.
+#' Either a study ID or sample list ID must be passed. If both `sample_list` and `study_id` are not `NULL`,
+#' `sample_list` ID will be searched and `study_id` will be ignored.
+#'
 #' @param study_id A character string indicating which study ID should be searched.
-#' Only 1 study allowed. If NULL, we will guess a default study ID based on your database URL.
+#' Only 1 study ID allowed.
+#' @param sample_list_id A character string indicating which sample list ID should be searched.
+#' Only 1 sample list ID allowed.
 #' @param base_url The database URL to query
 #' If `NULL` will default to URL set with `set_cbioportal_db(<your_db>)`
 #' @return A dataframe of sample_ids in a given study
@@ -158,34 +176,64 @@ get_clinical_by_study <- function(study_id = NULL,
 #' \dontrun{
 #' set_cbioportal_db("public")
 #' available_samples(study_id = "acc_tcga")
+#' available_samples(sample_list_id = "acc_tcga_cna")
 #' }
 #'
-available_samples <- function(study_id = NULL,
-                                base_url = NULL) {
+available_samples <- function(study_id = NULL, sample_list_id = NULL,
+                              base_url = NULL) {
 
-  .check_for_study_id(study_id)
+  sample_list <- sample_list_id %||%
+    .check_for_study_id(study_id)
 
-  # query --------------------------------------------------------------------
-  list_of_urls <- purrr::map(study_id,
-                             ~paste0("studies/", .x,
-                                     "/samples?"))
+  # query by sample list -------------------------------------------------------
+  if (!is.null(sample_list)) {
+    list_of_urls <- purrr::map(
+      sample_list,
+      ~ paste0(
+        "sample-lists/", .x,
+        "/sample-ids"
+      )
+    )
+
+    api_results <- purrr::map_df(list_of_urls, function(x) {
+      res <- cbp_api(url_path = x, base_url = base_url)
+      res$content
+      df <- unlist(res$content) %>%
+        tibble::enframe(name = NULL, value = "sampleId")
+
+      df
+    })
+
+    api_results <- api_results %>%
+      mutate(sampleListId = sample_list)
+  } else {
+
+    # query by study ID ----------------------------------------------------------
+    list_of_urls <- purrr::map(
+      study_id,
+      ~ paste0(
+        "studies/", .x,
+        "/samples?"
+      )
+    )
 
 
-  api_results <- purrr::map_dfr(list_of_urls, function(x) {
-    res <- cbp_api(url_path = x, base_url = base_url)
-    res$content
-    df <- bind_rows(res$content) %>%
-      select(.data$patientId, .data$sampleId,
-             .data$sampleType, .data$studyId)
-    df
-  })
-
+    api_results <- purrr::map_dfr(list_of_urls, function(x) {
+      res <- cbp_api(url_path = x, base_url = base_url)
+      res$content
+      df <- bind_rows(res$content) %>%
+        select(
+          "patientId", "sampleId",
+          "sampleType", "studyId"
+        )
+      df
+    })
+  }
 
   df <- api_results %>%
     dplyr::distinct()
 
   return(df)
-
 }
 
 #' Get All Patient IDs in a Study
@@ -216,7 +264,7 @@ available_patients <- function(study_id = NULL,
     res <- cbp_api(url_path = x, base_url = base_url)
     res$content
     df <- bind_rows(res$content) %>%
-      select(.data$patientId, .data$studyId)
+      select("patientId", "studyId")
     df
   })
 
@@ -227,4 +275,46 @@ available_patients <- function(study_id = NULL,
   return(df)
 
 }
+
+#' Get All Sample Lists Available For a Study
+#'
+#' @inheritParams available_samples
+#' @return A dataframe of patient_ids in a given study
+#'
+#' @export
+#'
+#' @examples
+#' \dontrun{
+#' set_cbioportal_db("public")
+#' available_sample_lists(study_id = "acc_tcga")
+#' }
+#'
+available_sample_lists <- function(study_id = NULL,
+                               base_url = NULL) {
+
+  .check_for_study_id(study_id)
+
+  # query --------------------------------------------------------------------
+  list_of_urls <- purrr::map(study_id,
+                             ~paste0("studies/", .x,
+                                     "/sample-lists?"))
+
+
+  api_results <- purrr::map_dfr(list_of_urls, function(x) {
+
+    res <- cbp_api(url_path = x, base_url = base_url)
+    res$content
+    df <- bind_rows(res$content)
+
+    df
+  })
+
+
+  df <- api_results %>%
+    dplyr::distinct()
+
+  return(df)
+
+}
+
 
